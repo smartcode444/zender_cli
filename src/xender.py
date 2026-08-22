@@ -11,8 +11,10 @@ import socket
 import asyncio
 import tkinter as tk
 import os, sys
-import netifaces
+import psutil
+import struct
 import time
+import re
 import logging
 import random
 import colorama
@@ -30,6 +32,7 @@ colorama.init(autoreset=True)
 
 SPINNER = ["-", "\\", "|", "/"]
 MENU_W  = 52   # box width
+ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*m')
 
 adjectives = ["Happy", "Clever", "Brave", "Calm", "Eager", "Fierce", "Gentle", "Jolly", "Kind", "Lively"]
 nouns = ["Panda", "Tiger", "Eagle", "River", "Comet", "Shadow", "Falcon", "Summit", "Ocean", "Breeze"]
@@ -59,6 +62,7 @@ class NetworkManager:
         self.TCP_PORT          = 5005
         self.CTRL_PORT         = 5006
         self.INTERFACES        = get_all_broadcast_addresses()
+        self.own_ips           = {ip for _, ip in self.INTERFACES}
 
         self.DISCOVERY_MESSAGE = "XENDER_DISCOVERY_REQUEST"
         self.RESPONSE_MESSAGE  = "I_SEE_U"
@@ -109,12 +113,12 @@ class NetworkManager:
             raise
 
         # Filter out echoes of my own broadcast
-        if not data.startswith(message):
+        if data.startswith(message):
             return None
 
         decoded = data.decode('utf-8').strip()    
         if decoded[:7] == "I_SEE_U":
-            device_name = data[7:]
+            device_name = decoded[7:]
             return device_name
 
         return None
@@ -155,6 +159,10 @@ class NetworkManager:
             data, address = self.udp_socket.recvfrom(1024)
         except socket.timeout:
             raise socket.timeout
+
+        sender_ip = address[0]
+        if sender_ip in self.own_ips:
+            return None, None
         
         username_len  = data[0]
         client_name   = data[1:1+username_len].decode('utf-8')
@@ -258,7 +266,7 @@ class NetworkManager:
                         on_progress(sent, filesize, start)
                     
 
-            return Back.GREEN + f"\n Sent '{name}' sent successfully"
+            return f"  \n[OK]Sent '{name}' sent successfully"
 
         except asyncio.CancelledError:
             self.send_cancel_signal()
@@ -412,12 +420,20 @@ class ConsoleView:
                 "[3]  Back",
             ],
         )
+        while True:
+            try:
+                sel = int(key) if key else None
+                if sel in (1, 2, 3):
+                    return sel
+            except ValueError:
+                continue
+
 
 
     @staticmethod
     def show_devices(devices):
         if not devices:
-            print("\n Back.RED +  [!]  No devices found.\n")
+            print("\n  " + Back.RED + "[!]  No devices found.\n")
             return
         rows = [f"[{i}]  {name}  ({addr[0]})"
                 for i, (name, addr) in enumerate(devices.items(), 1)]
@@ -428,12 +444,13 @@ class ConsoleView:
     @staticmethod
     def show_message(msg):
         """Normal message — always on its own line."""
-        print(f"  {msg}")
+        print(f"  {msg}{Style.RESET_ALL}")
 
     @staticmethod
     def show_inline(msg):
-        """Overwrite the current line (spinner / progress bar)."""
-        print(f"\r  {msg:<{MENU_W}}", end="", flush=True)
+        padding = max(0, MENU_W - visible_len(msg))
+        # Reset BEFORE the padding spaces so they are never colored
+        print(f"\r  {msg}{Style.RESET_ALL}{' ' * padding}", end="", flush=True)
 
     @staticmethod
     def end_inline():
@@ -516,8 +533,8 @@ class XenderController():
                         break
 
                     try:
-                        if data := self.model.scan(msg, devices):
-                            name, addr = data
+                        name, addr = self.model.scan(msg, devices)
+                        if name:
                             devices[name] = addr
                             # Don't show_message here — breaks the spinner line
                     except socket.timeout:
@@ -608,77 +625,77 @@ class XenderController():
 
 
     async def try_send(self):
-            """Send files"""
-            cancelled = False
-            file_paths = filedialog.askopenfiles(
-                title="Xender -> Select files",
-            )
-            if not file_paths:
-                self.view.show_message(Back.RED + "No files selected.")
-                return
+        """Send files"""
+        cancelled = False
+        file_paths = filedialog.askopenfiles(
+            title="Xender -> Select files",
+        )
+        if not file_paths:
+            self.view.show_message(Back.RED + "No files selected.")
+            return
 
-            # Cannot send more than 99 files
-            no_files = len(file_paths)
-            if   1 <= no_files < 9:
-                no_files_bytes = ("0"+str(no_files)).encode('utf-8')
-            elif 10 <= no_files <= 99:
-                no_files_bytes = str(no_files).encode('utf-8')
-            else:
-                self.view.show_message(Back.RED + "Too many files selected (max 99).")
-                return
-            self.model.send_bytes(no_files_bytes)
+        # Cannot send more than 99 files
+        no_files = len(file_paths)
+        if   1 <= no_files < 9:
+            no_files_bytes = ("0"+str(no_files)).encode('utf-8')
+        elif 10 <= no_files <= 99:
+            no_files_bytes = str(no_files).encode('utf-8')
+        else:
+            self.view.show_message(Back.RED + "Too many files selected (max 99).")
+            return
+        self.model.send_bytes(no_files_bytes)
 
-            for file_obj in file_paths:
-                name = os.path.basename(file_obj.name)
-                path = file_obj.name
-                filesize = os.path.getsize(file_obj.name)
-                self.view.show_message(Back.BLUE + f"[>>] Sending '{name}' ({filesize / (1024*1024):.1f} MB) (press 'q' to stop)")
+        for file_obj in file_paths:
+            name = os.path.basename(file_obj.name)
+            path = file_obj.name
+            filesize = os.path.getsize(file_obj.name)
+            self.view.show_message(f"\n[>>] Sending '{name}' ({filesize / (1024*1024):.1f} MB) (press 'q' to stop)")
 
-                try:
-                    send_file = asyncio.create_task(
-                       self.model._send_file(
-                            name, path,
-                            on_progress=lambda s, t, st: self.view.show_progress(s, t, name, st)
-                        )
+            try:
+                send_file = asyncio.create_task(
+                    self.model._send_file(
+                        name, path,
+                        on_progress=lambda s, t, st: self.view.show_progress(s, t, name, st)
                     )
-                    pressed_key = asyncio.create_task(async_key_pressed())
-                    watch_cancel = asyncio.create_task(self.model.watch_for_cancel())
+                )
+                pressed_key = asyncio.create_task(async_key_pressed())
+                watch_cancel = asyncio.create_task(self.model.watch_for_cancel())
 
-                    done, pending = await asyncio.wait(
-                        {send_file, pressed_key, watch_cancel}, 
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
+                done, pending = await asyncio.wait(
+                    {send_file, pressed_key, watch_cancel}, 
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                if send_file in done:
+                    result = send_file.result()
+                    self.view.end_inline()      # move off progress bar line
+                    self.view.show_message(result)
                     
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except (asyncio.CancelledError, Exception):
-                            pass
-    
-                    if send_file in done:
-                        result = send_file.result()
-                        self.view.end_inline()      # move off progress bar line
-                        self.view.show_message(result)
-                        
-                    elif pressed_key in done:
-                        self.view.show_message(Back.RED + "[!] Sending stopped by user.")
-                        cancelled = True
-                        break
+                elif pressed_key in done:
+                    self.view.show_message(Back.RED + "[!] Sending stopped by user.")
+                    cancelled = True
+                    break
 
-                    elif watch_cancel in done:
-                        self.view.show_message(Back.RED + "[!] Transfer cancelled by reciever.")
-                        break
+                elif watch_cancel in done:
+                    self.view.show_message(Back.RED + "[!] Transfer cancelled by reciever.")
+                    break
 
-                except Exception as e:
-                    self.view.show_message(Back.RED + f"[!] Error sending {name}: {e}")
+            except Exception as e:
+                self.view.show_message(Back.RED + f"[!] Error sending {name}: {e}")
 
-            if not cancelled:
-                self.model._send_end()
+        if not cancelled:
+            self.model._send_end()
 
     async def try_recieve(self):
         """Recieve files"""
-        self.model.clear_receive_buffer()
+        # self.model.clear_receive_buffer()
 
         # Prompt user for destination folder
         dest_folder = filedialog.askdirectory(title="Select destination folder")
@@ -699,7 +716,7 @@ class XenderController():
         while files_recieved < no_files_to_recieve:
             files_recieved += 1 
             try:
-                self.view.show_message(Back.BLUE + f"\n[>>]Recieving file {files_recieved}/{no_files_to_recieve}... (press 'q' to stop)")
+                self.view.show_message(f"\n[>>]Recieving file {files_recieved}/{no_files_to_recieve}... (press 'q' to stop)")
                 recv_file = asyncio.create_task(
                     self.model._recieve_file(
                         dest_folder,
@@ -740,8 +757,8 @@ class XenderController():
     async def transfer_loop(self):
         """Transfer files"""
         while True:
-            self.view.show_message("\nTransfer FILES \n[1] Send files \n[2] Recieve files \n[3] Back to main")
-            sel = self.view.get_selection(3)
+            sel = self.view.show_transfer_menu()
+            # sel = self.view.get_selection(3)
             if   sel == 1:
                 await self.try_send()    
             elif sel == 2:
@@ -755,7 +772,7 @@ def on_hotspot():
     # Check if is_admin
     if not hotspot.is_admin():
         print(Back.RED + "[!] ERROR: This script must be run as Administrator to activate Hotspot.")
-        print(Back.RED + "Please right-click the script and select 'Run as administrator'.")
+        print("Please right-click the script and select 'Run as administrator'.")
         return
 
     # Check driver support
@@ -832,7 +849,7 @@ def check_wifi_hotspot():
     if client_state == "connected" and client_ssid:
         if WHconn.is_hotspot_network(client_ssid, client_network_type):
             device_name = WHconn.guess_device_name(client_ssid)
-            print(Back.BLUE + "\n[i] Your device is connected to another device's hotspot.")
+            print("\n[i] Your device is connected to another device's hotspot.")
             print(f"   Network name   : {client_ssid}")
             print(f"   Device         : {device_name}")
             print(f"   Network type   : {client_network_type if client_network_type else 'Unknown'}")
@@ -841,15 +858,15 @@ def check_wifi_hotspot():
     # Case 3: Neither – not part of any hotspot scenario
     # print("\n   Your device is NOT in a hotspot connection") # scenario.
     if hosted_started and client_count == 0:
-        print("  " + Back.BLUE + "[i] (Your hotspot is on, but no other devices are connected.)")
+        print("  [i] (Your hotspot is on, but no other devices are connected.)")
     elif hosted_started and client_count > 0:
         # already handled above, but just in case
         pass
     elif client_state == "connected":
         print("  " + Back.GREEN + f"[OK] You are connected to Wi-Fi network: {client_ssid}")
-        print("  " + Back.BLUE + "[i] (But This does not appear to be a hotspot from a Supported device.)")
+        print("  [i] (But This does not appear to be a hotspot from a Supported device.)")
     else:
-        print("  " + Back.BLUE + " [i] Wi-Fi is either off or not connected to any network.")
+        print("    [i] Wi-Fi is either off or not connected to any network.")
 
     # Additional details for debugging
     if hosted_started and client_count == 0:
@@ -861,24 +878,37 @@ def check_wifi_hotspot():
 
 def get_all_broadcast_addresses():
     """
-    Return broadcast addresses for every active non-loopback interface.
-    On a hotspot host this returns BOTH the main adapter and virtual
-    hotspot adapter addresses, so discovery works regardless of who
-    initiates the scan.
+    Returns a list of (broadcast_address, own_ip) for every
+    active non-loopback network interface on this machine.
+    Uses psutil instead of netifaces.
     """
-    result = []
-    seen   = set()
-    for iface in netifaces.interfaces():
-        addrs = netifaces.ifaddresses(iface)
-        if netifaces.AF_INET not in addrs:
-            continue
-        for addr in addrs[netifaces.AF_INET]:
-            ip  = addr.get('addr', '')
-            brd = addr.get('broadcast')
-            if brd and not ip.startswith('127.') and brd not in seen:
-                result.append((brd, ip))   # keep (broadcast, own_ip) pair
-                seen.add(brd)
-    return result or [('255.255.255.255', '0.0.0.0')]
+    results = []
+    seen    = set()
+
+    for iface_name, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+
+            # We only care about IPv4 addresses
+            if addr.family != socket.AF_INET:
+                continue
+
+            ip      = addr.address
+            netmask = addr.netmask
+
+            # Skip loopback and interfaces with no netmask
+            if not netmask or ip.startswith('127.'):
+                continue
+
+            ip_int  = struct.unpack('!I', socket.inet_aton(ip))[0]
+            nm_int  = struct.unpack('!I', socket.inet_aton(netmask))[0]
+            brd_int = (ip_int & nm_int) | (~nm_int & 0xFFFFFFFF)
+            broadcast = socket.inet_ntoa(struct.pack('!I', brd_int))
+
+            if broadcast not in seen:
+                results.append((broadcast, ip))
+                seen.add(broadcast)
+
+    return results or [('255.255.255.255', '0.0.0.0')]
 
 
 def key_pressed() -> bool | str:
@@ -932,6 +962,10 @@ async def async_key_pressed() -> str | None:
 
     except KeyboardInterrupt:
             return None
+
+def visible_len(s: str) -> int:
+    """Length of string ignoring invisible ANSI color codes."""
+    return len(ANSI_ESCAPE.sub('', s))
 
 def print_network_info():
     interfaces = get_all_broadcast_addresses()
@@ -1018,4 +1052,3 @@ if __name__ == "__main__":
 
     print(Back.GREEN + "Thank you for using zender!")            
     sys.exit()
-
