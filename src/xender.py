@@ -23,7 +23,6 @@ from datetime import datetime
 from src import WHconn
 from src import hotspot
 from colorama import Fore, Back, Style
-# from color import fg, bg
 
 root = tk.Tk()
 root.withdraw()
@@ -620,7 +619,6 @@ class XenderController():
                     
 
             elif choice and choice == '3':
-                # self.view.show_message("Goodbye!")
                 break
 
 
