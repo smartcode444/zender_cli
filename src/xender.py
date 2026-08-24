@@ -10,6 +10,7 @@ import subprocess
 import socket
 import asyncio
 import tkinter as tk
+import tkfilebrowser  
 import os, sys
 import psutil
 import struct
@@ -20,6 +21,7 @@ import random
 import colorama
 from tkinter import filedialog
 from datetime import datetime
+from dataclasses import dataclass
 from src import WHconn
 from src import hotspot
 from colorama import Fore, Back, Style
@@ -35,6 +37,11 @@ ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*m')
 
 adjectives = ["Happy", "Clever", "Brave", "Calm", "Eager", "Fierce", "Gentle", "Jolly", "Kind", "Lively"]
 nouns = ["Panda", "Tiger", "Eagle", "River", "Comet", "Shadow", "Falcon", "Summit", "Ocean", "Breeze"]
+
+@dataclass
+class FileInfo:
+    name: str          
+    relative_path: str  
 
 # Force UTF-8 on Windows so box-drawing chars render in modern terminals
 if os.name == 'nt':
@@ -230,7 +237,7 @@ class NetworkManager:
         except OSError:
             pass
 
-    async def _send_file(self, name, path, on_progress=None):
+    async def _send_file(self, name, path, rel_path, on_progress=None):
         """Send a single file over the data socket. 
         Notifies reciever on cancellation."""
         loop = asyncio.get_event_loop()
@@ -239,7 +246,7 @@ class NetworkManager:
 
         try:
             filesize = os.path.getsize(path)
-            namebytes = name.encode('utf-8')
+            namebytes = rel_path.encode('utf-8') if rel_path else name.encode('utf-8')
 
             # ── Header
             # [0x01][4B name_len][name][8B file_size]
@@ -333,6 +340,7 @@ class NetworkManager:
 
                     start    = time.perf_counter()
                     filepath = os.path.join(dest_folder, filename)
+                    os.makedirs(os.path.dirname(filepath), exist_ok=True)
                     with open(filepath, "wb") as f:
                         received = 0
                         while received < filesize:
@@ -347,10 +355,8 @@ class NetworkManager:
                             if on_progress:
                                 on_progress(received, filesize, start)
 
-                    return Back.GREEN + f"\n[OK] File {filename} recieved"
+                    ConsoleView.show_message(Back.GREEN + f"[OK] '{filename}' received")
 
-                else:
-                    return Back.RED + f"\n[!] Unknown command: {cmd!r}"
 
         except asyncio.CancelledError:
             self.send_cancel_signal()
@@ -415,14 +421,16 @@ class ConsoleView:
             "File Transfer",
             [
                 "[1]  Send files",
-                "[2]  Receive files",
-                "[3]  Back",
+                "[2]  Send Folder",
+                "[3]  Receive files/folder",
+                "[4]  Back",
             ],
         )
         while True:
+            key = key_pressed()
             try:
                 sel = int(key) if key else None
-                if sel in (1, 2, 3):
+                if sel in (1, 2, 3, 4):
                     return sel
             except ValueError:
                 continue
@@ -621,16 +629,69 @@ class XenderController():
             elif choice and choice == '3':
                 break
 
-
-    async def try_send(self):
-        """Send files"""
-        cancelled = False
-        file_paths = filedialog.askopenfiles(
-            title="Xender -> Select files",
+    async def try_send_files(self):
+        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        files = filedialog.askopenfilenames(
+            title="Zender -> Select files", initialdir=downloads_dir
         )
-        if not file_paths:
+        if not files:
             self.view.show_message(Back.RED + "No files selected.")
             return
+        
+        file_paths = sorted([
+            FileInfo(
+                name=os.path.normpath(f),
+                relative_path=None          # flat file, no folder structure
+            )
+            for f in files
+        ])
+
+        await self.try_send(file_paths)
+
+
+    async def try_send_folders(self):
+        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        folders = tkfilebrowser.askopendirnames(title="Select Multiple Folders", initialdir=downloads_dir)
+
+        if not folders:
+            self.view.show_message(Back.RED + "No folders selected.")
+            return
+
+        rel_file_paths = []
+
+        # Process each selected directory
+        for folder_path in sorted(folders):
+            normalized_folder = os.path.normpath(folder_path)
+            folder_files = []
+            
+            # Traverse folder contents
+            for root_dir, _, files in os.walk(normalized_folder):
+                for file in files:
+                    full_path = os.path.join(root_dir, file)
+                    folder_name = os.path.basename(normalized_folder)
+                    rel_path    = os.path.join(folder_name, os.path.relpath(full_path, normalized_folder))
+                    rel_path = rel_path.replace(os.sep, '/')
+                    file_object = FileInfo(name=full_path, relative_path=rel_path)
+                    folder_files.append(file_object)
+            
+            # Store paths if folder is not empty, otherwise ignore it
+            if folder_files:
+                rel_file_paths.extend(folder_files)
+
+        # Sort the final flat list for consistency
+        rel_file_paths.sort(key=lambda file_obj: file_obj.relative_path)
+
+        await self.try_send(rel_file_paths)
+
+    async def try_send(self, file_paths: list):
+        """Send files"""
+        cancelled = False
+        # file_paths = filedialog.askopenfiles(
+        #     title="Xender -> Select files",
+        # )
+        # if not file_paths:
+        #     self.view.show_message(Back.RED + "No files selected.")
+        #     return
 
         # Cannot send more than 99 files
         no_files = len(file_paths)
@@ -649,10 +710,13 @@ class XenderController():
             filesize = os.path.getsize(file_obj.name)
             self.view.show_message(f"\n[>>] Sending '{name}' ({filesize / (1024*1024):.1f} MB) (press 'q' to stop)")
 
+            if file_obj.relative_path: rel_path = file_obj.relative_path
+            else: rel_path = None
+
             try:
                 send_file = asyncio.create_task(
                     self.model._send_file(
-                        name, path,
+                        name, path, rel_path,
                         on_progress=lambda s, t, st: self.view.show_progress(s, t, name, st)
                     )
                 )
@@ -683,6 +747,7 @@ class XenderController():
 
                 elif watch_cancel in done:
                     self.view.show_message(Back.RED + "[!] Transfer cancelled by reciever.")
+                    cancelled = True 
                     break
 
             except Exception as e:
@@ -705,52 +770,49 @@ class XenderController():
         
         # Recieve the number of files to recieve
         try:
-            bytes = self.model.recv_bytes(2)
-        except ValueError:
-            return 
+            count_bytes = self.model.recv_bytes(2)
+            no_files = int(count_bytes.decode('utf-8'))
+            self.view.show_message(f"  Receiving {no_files} file(s)...")
+        except (ValueError, OSError):
+            self.view.show_message(Back.RED + "[!] Failed to read file count.")
+            return
         
-        no_files_to_recieve = int(bytes.decode('utf-8'))
-        files_recieved = 0
-        while files_recieved < no_files_to_recieve:
-            files_recieved += 1 
-            try:
-                self.view.show_message(f"\n[>>]Recieving file {files_recieved}/{no_files_to_recieve}... (press 'q' to stop)")
-                recv_file = asyncio.create_task(
-                    self.model._recieve_file(
-                        dest_folder,
-                        on_progress=lambda s, t, st: self.view.show_progress(s, t, "receiving", st)
-                    )
+        try:
+            recv_file = asyncio.create_task(
+                self.model._recieve_file(
+                    dest_folder,
+                    on_progress=lambda s, t, st: self.view.show_progress(s, t, "receiving", st)
                 )
-                pressed_key = asyncio.create_task(async_key_pressed())
-                watch_cancel = asyncio.create_task(self.model.watch_for_cancel())
+            )
+            pressed_key = asyncio.create_task(async_key_pressed())
+            watch_cancel = asyncio.create_task(self.model.watch_for_cancel())
 
-                done, pending = await asyncio.wait(
-                    {recv_file, pressed_key, watch_cancel}, 
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+            done, pending = await asyncio.wait(
+                {recv_file, pressed_key, watch_cancel}, 
+                return_when=asyncio.FIRST_COMPLETED
+            )
 
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-                if recv_file in done:
-                    self.view.end_inline()                  # move off progress bar line
-                    self.view.show_message(recv_file.result())
-                    
-                elif pressed_key in done:
-                    self.model.send_cancel_signal()
-                    self.view.show_message(Back.RED + "[!] Recieving stopped by user.")
+            if recv_file in done:
+                self.view.end_inline()                  # move off progress bar line
+                self.view.show_message(recv_file.result())
+                
+            elif pressed_key in done:
+                self.model.send_cancel_signal()
+                self.view.show_message(Back.RED + "[!] Recieving stopped by user.")
 
-                elif watch_cancel in done:
-                    self.view.show_message(Back.RED + "[!]  Transfer cancelled by sender.")
-                    break
+            elif watch_cancel in done:
+                self.view.show_message(Back.RED + "[!]  Transfer cancelled by sender.")
 
-            except Exception as e:
-                print(f"Error: {e}")
-                self.view.show_message(Back.RED + f"[!] Error: {e}")
+        except Exception as e:
+            print(f"Error: {e}")
+            self.view.show_message(Back.RED + f"[!] Error: {e}")
 
     async def transfer_loop(self):
         """Transfer files"""
@@ -758,10 +820,12 @@ class XenderController():
             sel = self.view.show_transfer_menu()
             # sel = self.view.get_selection(3)
             if   sel == 1:
-                await self.try_send()    
+                await self.try_send_files()    
             elif sel == 2:
+                await self.try_send_folders()
+            elif sel == 3:
                 await self.try_recieve()
-            elif sel == 3:break
+            elif sel == 4:break
 
 
 
