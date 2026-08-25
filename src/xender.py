@@ -22,12 +22,11 @@ import colorama
 from tkinter import filedialog
 from datetime import datetime
 from dataclasses import dataclass
-from src import WHconn
-from src import hotspot
+# from src import WHconn
+# from src import hotspot
+import WHconn
+import hotspot
 from colorama import Fore, Back, Style
-
-root = tk.Tk()
-root.withdraw()
 
 colorama.init(autoreset=True)
 
@@ -221,9 +220,18 @@ class NetworkManager:
         except (OSError, asyncio.CancelledError):
             raise
 
-    def recv_bytes(self, no_bytes):
+    async def recv_bytes(self, no_bytes):
         """Recieve bytes."""
-        return self.tcp_client_socket.recv(no_bytes)
+        loop = asyncio.get_event_loop()
+        self.tcp_client_socket.setblocking(False)
+
+        buf = b''
+        while len(buf) < no_bytes:
+            chunk = await loop.sock_recv(self.tcp_client_socket, 2 - len(buf))
+            if not chunk:
+                raise ConnectionError("Sender disconnected before transfer started.")
+            buf += chunk
+        return int(buf.decode('utf-8'))
 
     def send_bytes(self, bytes):
         """Send bytes."""
@@ -262,7 +270,7 @@ class NetworkManager:
                 sent = 0
                 while sent < filesize:
                     if self._cancel_flag.is_set(): # Check between chunks
-                        return Back.RED + f"\n[!] Transfer of '{name}' stopped"
+                        return f"{Back.RED}\n[!] Transfer of '{name}' stopped"
                     chunk = f.read(65536)
                     if not chunk:
                         break
@@ -279,7 +287,7 @@ class NetworkManager:
             raise
 
         except OSError as e:
-            raise RuntimeError(Back.RED + f"\n[!] Error while sending '{name}'")
+            raise RuntimeError(f"{Back.RED}\n[!] Error while sending '{name}'")
 
         finally:
             try:
@@ -287,19 +295,6 @@ class NetworkManager:
             except OSError:
                 pass
 
-
-    def clear_receive_buffer(self):
-        """Reads and discards all pending data currently in the socket buffer."""
-        self.tcp_client_socket.setblocking(False)
-        try:
-            while True:
-                data = self.recv_bytes(4096)
-                if not data:
-                    break
-        except BlockingIOError:
-            pass
-        finally:
-            self.tcp_client_socket.setblocking(True)
     
     async def _recieve_file(self, dest_folder, on_progress=None):
         """Receive files over the data socket. 
@@ -336,7 +331,7 @@ class NetworkManager:
                     filesize = int.from_bytes(await recv_exact(8), 'big')
 
                     # Recieve file
-                    print(Back.BLUE + f"Receiving {filename} ({filesize/(1024*1024):.2f} MB)....") 
+                    print(f"{Back.BLUE}Receiving {filename} ({filesize/(1024*1024):.2f} MB)....") 
 
                     start    = time.perf_counter()
                     filepath = os.path.join(dest_folder, filename)
@@ -528,7 +523,7 @@ class XenderController():
                 msg = b"I_SEE_U" + self.username.encode('utf-8')
                 while True:
                     self.view.show_inline(
-                        Back.BLUE + f"{SPINNER[spin_i % len(SPINNER)]}  Scanning... {len(devices)} found"
+                        f"{Back.BLUE}{SPINNER[spin_i % len(SPINNER)]}  Scanning... {len(devices)} found"
                     )
                     spin_i += 1  
 
@@ -548,7 +543,7 @@ class XenderController():
                         continue
                     except Exception as e:
                         self.view.end_inline()
-                        self.view.show_message(Back.RED + f"[!]  Error scanning: {e}")
+                        self.view.show_message(f"{Back.RED}[!]  Error scanning: {e}")
                         break
 
                 self.view.end_inline()
@@ -559,7 +554,7 @@ class XenderController():
                     if idx == 'q':
                         continue
                     selected_name = list(devices.keys())[idx-1]
-                    self.view.show_message(Back.BLUE + f"Connecting to {selected_name}... (press 'q' to stop)")
+                    self.view.show_message(f"{Back.BLUE}Connecting to {selected_name}... (press 'q' to stop)")
                     while True:
                         user_key = self.view.get_input()
                         if user_key == 'q':
@@ -573,7 +568,7 @@ class XenderController():
                         except socket.timeout:
                             continue
                         except Exception as e:
-                            self.view.show_message(Back.RED + f"[!] Error connecting to {selected_name}: {e}.")
+                            self.view.show_message(f"{Back.RED}[!] Error connecting to {selected_name}: {e}.")
                             break
 
 
@@ -587,7 +582,7 @@ class XenderController():
 
                 while True:
                     self.view.show_inline(
-                        Back.BLUE + f"{SPINNER[spin_i % len(SPINNER)]}  Broadcasting... (press q to stop)"
+                        f"{Back.BLUE}{SPINNER[spin_i % len(SPINNER)]}  Broadcasting... (press q to stop)"
                     )
                     spin_i += 1  
                     user_key = self.view.get_input()
@@ -596,7 +591,7 @@ class XenderController():
                         break
                     try:
                         if conn := self.model.broadcast(message):
-                            choice = self.view.ask_yes_no(Back.BLUE + f"\nAccept connection from '{conn}'")
+                            choice = self.view.ask_yes_no(f"{Back.BLUE}\nAccept connection from '{conn}'")
                             if   choice == "1":
                                 break
                             elif choice == "2":
@@ -609,7 +604,7 @@ class XenderController():
 
                 # Connect to device
                 if choice == "1":
-                    self.view.show_message(Back.BLUE + f"Connecting to {conn}... (press 'q' to stop)")
+                    self.view.show_message(f"{Back.BLUE}Connecting to {conn}... (press 'q' to stop)")
                     while True:
                         user_key = self.view.get_input()
                         if user_key == "q":
@@ -622,7 +617,7 @@ class XenderController():
                         except socket.timeout:
                             continue
                         except Exception as e:
-                            self.view.show_message(Back.RED + f"[!] Error connecting to {conn}: {e}.")
+                            self.view.show_message(f"{Back.RED}[!] Error connecting to {conn}: {e}.")
                             break
                     
 
@@ -632,7 +627,7 @@ class XenderController():
     async def try_send_files(self):
         downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
         files = filedialog.askopenfilenames(
-            title="Zender -> Select files", initialdir=downloads_dir
+            title="Zender -> Select files", initialdir=downloads_dir, parent=root
         )
         if not files:
             self.view.show_message(Back.RED + "No files selected.")
@@ -649,9 +644,29 @@ class XenderController():
         await self.try_send(file_paths)
 
 
+    def ask_open_dirnames(self, title, initialdir):
+        """
+        Keeps prompting askdirectory until the user cancels, collecting one folder per dialog.
+        """
+        folders = []
+        while True:
+            prompt = f"{title}  [{len(folders)} selected — Cancel when done]"
+            folder = filedialog.askdirectory(
+                title=prompt,
+                initialdir=initialdir or os.path.expanduser("~"),
+                parent=root,
+                mustexist=True,
+            )
+            if not folder:          # user hit Cancel — we're done
+                break
+            folder = os.path.normpath(folder)
+            if folder not in folders:
+                folders.append(folder)
+        return folders
+
     async def try_send_folders(self):
         downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-        folders = tkfilebrowser.askopendirnames(title="Select Multiple Folders", initialdir=downloads_dir)
+        folders = self.ask_open_dirnames(title="Select Folders to Send", initialdir=downloads_dir)
 
         if not folders:
             self.view.show_message(Back.RED + "No folders selected.")
@@ -751,31 +766,52 @@ class XenderController():
                     break
 
             except Exception as e:
-                self.view.show_message(Back.RED + f"[!] Error sending {name}: {e}")
+                self.view.show_message(f"{Back.RED}[!] Error sending {name}: {e}")
 
         if not cancelled:
             self.model._send_end()
 
     async def try_recieve(self):
         """Recieve files"""
-        # self.model.clear_receive_buffer()
-
-        # Prompt user for destination folder
-        dest_folder = filedialog.askdirectory(title="Select destination folder")
-        if dest_folder:
-            self.view.show_message(Back.GREEN + f"[OK] Destination folder {dest_folder}")
-        else:
-            self.view.show_message(Back.RED + f"[!] Invalid Destination folder")
-
         
-        # Recieve the number of files to recieve
-        try:
-            count_bytes = self.model.recv_bytes(2)
-            no_files = int(count_bytes.decode('utf-8'))
-            self.view.show_message(f"  Receiving {no_files} file(s)...")
-        except (ValueError, OSError):
-            self.view.show_message(Back.RED + "[!] Failed to read file count.")
+        # Prompt user for destination folder
+        dest_folder = filedialog.askdirectory(title="Select destination folder", parent=root)
+        if not dest_folder:
+            self.view.show_message(f"{Back.RED}[!] Invalid Destination folder")
             return
+        self.view.show_message(f"{Back.GREEN}[OK] Destination folder {dest_folder}")
+
+        # Async file count receive — user can cancel while waiting
+
+        try:
+            count_task  = asyncio.create_task(self.modelrecv_bytes(2))
+            cancel_task = asyncio.create_task(async_key_pressed())
+
+            done, pending = await asyncio.wait(
+                {count_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            if cancel_task in done:
+                self.view.show_message(Back.RED + "[!] Cancelled — returning to menu.")
+                return
+
+            no_files = count_task.result()
+            self.view.show_message(f"  Receiving {no_files} file(s)...")
+
+        except Exception as e:
+            self.view.show_message(Back.RED + f"[!] Failed to read file count: {e}")
+            return
+        finally:
+            self.model.tcp_client_socket.setblocking(True)
+        
+        # Main Recieve
         
         try:
             recv_file = asyncio.create_task(
@@ -811,8 +847,8 @@ class XenderController():
                 self.view.show_message(Back.RED + "[!]  Transfer cancelled by sender.")
 
         except Exception as e:
-            print(f"Error: {e}")
-            self.view.show_message(Back.RED + f"[!] Error: {e}")
+            self.view.show_message(f"{Back.RED}[!] Error: {e}")
+
 
     async def transfer_loop(self):
         """Transfer files"""
@@ -942,7 +978,6 @@ def get_all_broadcast_addresses():
     """
     Returns a list of (broadcast_address, own_ip) for every
     active non-loopback network interface on this machine.
-    Uses psutil instead of netifaces.
     """
     results = []
     seen    = set()
@@ -976,6 +1011,7 @@ def get_all_broadcast_addresses():
 def key_pressed() -> bool | str:
     """Return the character if a key was pressed, else None."""
     try:
+        time.sleep(0.01)
         if os.name == 'nt':
             import msvcrt
             if msvcrt.kbhit():
@@ -1070,10 +1106,12 @@ def cls():
 
 USERNAME = generate_username()
 
-
 if __name__ == "__main__":
+    root = tk.Tk()
+    root.withdraw()
+
     cls()
-    print_network_info()
+    # print_network_info()
     
     xender = XenderController(USERNAME)
 
