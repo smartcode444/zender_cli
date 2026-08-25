@@ -22,10 +22,10 @@ import colorama
 from tkinter import filedialog
 from datetime import datetime
 from dataclasses import dataclass
-# from src import WHconn
-# from src import hotspot
-import WHconn
-import hotspot
+from src import WHconn
+from src import hotspot
+# import WHconn
+# import hotspot
 from colorama import Fore, Back, Style
 
 colorama.init(autoreset=True)
@@ -773,7 +773,7 @@ class XenderController():
 
     async def try_recieve(self):
         """Recieve files"""
-        
+
         # Prompt user for destination folder
         dest_folder = filedialog.askdirectory(title="Select destination folder", parent=root)
         if not dest_folder:
