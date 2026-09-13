@@ -10,6 +10,9 @@ Key files
 ---------
 - `src/xender.py` — main implementation (discovery, connection, transfer, console UI).
 - `test/test_xender.py` — interactive test/demo for sending/receiving sockets.
+- `test/udp_scan.py` — test/demo for UDP scan logic.
+- `test/udp_broadcast.py` — test/demo for UDP broadcast logic.
+
 
 Features
 --------
@@ -36,7 +39,7 @@ python -m venv .venv
 source .venv/bin/activate            # Unix/macOS
 ```
 
-2. (Optional) Install `netifaces`:
+2. Install `netifaces`:
 
 ```powershell
 pip install netifaces
