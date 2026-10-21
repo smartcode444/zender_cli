@@ -17,8 +17,9 @@ Key files
 Features
 --------
 - Peer discovery (broadcast / scan).
-- TCP-based file transfer with simple framing (filename length, filename, filesize, then file bytes).
+- TCP-based file transfer with simple framing (filename length, filename, filesize, then file bytes) and progress status.
 - Console menu for scan/broadcast and send/receive flows.
+- Console menu for activating device hotspot and fetching wifi-hotspot status
 - Cross-platform input handling (Windows `msvcrt`, Unix `select`) and Tk `filedialog` for choosing files/folders.
 
 Requirements
