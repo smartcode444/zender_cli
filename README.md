@@ -2,6 +2,8 @@
 
 Simple LAN file-transfer utility using UDP discovery and TCP file transfer.
 
+<img width="979" height="512" alt="Screenshot 2026-10-21 221611" src="https://github.com/user-attachments/assets/3e85ae38-ec25-4850-b662-e7865062c364" />
+
 Summary
 -------
 `Zender` discovers peers on the local network (UDP broadcast), negotiates a TCP connection, and sends or receives files using a small, interactive console UI and native file/folder choosers.
