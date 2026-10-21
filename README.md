@@ -84,10 +84,13 @@ Or run two terminals manually:
 
 Notes & caveats
 ---------------
-- The code falls back to the broadcast address `255.255.255.255` when `netifaces` is not available or no broadcast address is found.
 - On Windows, console key detection uses `msvcrt.kbhit()`; on Unix it uses `select` and reading from stdin.
 - The UI uses `tkinter.filedialog` for file/folder selection — when running headless or in CI, GUI dialogs will block or fail.
 - The current transfer protocol is intentionally simple and meant for local, trusted networks — it has no encryption or integrity verification.
+
+Why I built Zender CLI
+----------------------
+ I was frustrated with the difficulty me and my friends encountered when we need to share movies and games between our PCS. The usual process was to send the files to a flash drive if available for temporary storage, most of the times we used our mobile devices, and the send from the flash drive to the receiver PC's. I noticed we did not have that issue when sending files from a mobile to phone another, because we could easily do that through Xender mobile app via Wifi-Hotspot connection. So I built my own version of Xender, `Zender` but for PC's. Me and my friends now use Zender all the time, I am glad I built `ZENDER`. I am currently working on the GUI version for a better User Interaction.  
 
 Contributing
 ------------
